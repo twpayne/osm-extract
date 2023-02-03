@@ -1,5 +1,9 @@
 package main
 
+// FIXME implement polygon holes
+// FIXME factor out orb/go-geos conversions
+// FIXME implement Overpass API instead of -ids/-tags
+
 import (
 	"context"
 	"encoding/json"
@@ -21,14 +25,14 @@ import (
 )
 
 var (
-	compact        = flag.Bool("c", false, "compact output")
-	idsFilterStr   = flag.String("ids", "", "IDs")
+	compact        = flag.Bool("compact", false, "compact output")
+	idsFilterStr   = flag.String("ids", "", "ID filter")
 	inputFilename  = flag.String("i", "", "input filename (.osm.pbf format)")
 	osmType        = flag.String("type", "", "type (node, way, or relation)")
-	outputFilename = flag.String("o", "", "output filename")
-	polygonize     = flag.Bool("p", false, "polygonize ways")
+	outputFilename = flag.String("o", "", "output filename (GeoJSON format)")
+	polygonize     = flag.Bool("polygonize", false, "polygonize ways")
 	procs          = flag.Int("j", runtime.GOMAXPROCS(0), "parallelism")
-	tagsFilterStr  = flag.String("tags", "", "tags")
+	tagsFilterStr  = flag.String("tags", "", "tag filter")
 )
 
 func newNodeIDsFilter(idsFilter string) (func(*osm.Node) bool, error) {
