@@ -22,15 +22,16 @@ import (
 
 var (
 	compact        = flag.Bool("c", false, "compact output")
-	idsFilter      = flag.String("ids", "", "IDs")
+	idsFilterStr   = flag.String("ids", "", "IDs")
 	inputFilename  = flag.String("i", "", "input filename (.osm.pbf format)")
 	osmType        = flag.String("type", "", "type (node, way, or relation)")
 	outputFilename = flag.String("o", "", "output filename")
 	polygonize     = flag.Bool("p", false, "polygonize ways")
 	procs          = flag.Int("j", runtime.GOMAXPROCS(0), "parallelism")
+	tagsFilterStr  = flag.String("tags", "", "tags")
 )
 
-func nodeIDsFilter(idsFilter string) (func(*osm.Node) bool, error) {
+func newNodeIDsFilter(idsFilter string) (func(*osm.Node) bool, error) {
 	if idsFilter == "" {
 		return nil, nil
 	}
@@ -49,7 +50,7 @@ func nodeIDsFilter(idsFilter string) (func(*osm.Node) bool, error) {
 	}, nil
 }
 
-func wayIDsFilter(idsFilter string) (func(*osm.Way) bool, error) {
+func newWayIDsFilter(idsFilter string) (func(*osm.Way) bool, error) {
 	if idsFilter == "" {
 		return nil, nil
 	}
@@ -68,7 +69,7 @@ func wayIDsFilter(idsFilter string) (func(*osm.Way) bool, error) {
 	}, nil
 }
 
-func relationIDsFilter(idsFilter string) (func(*osm.Relation) bool, error) {
+func newRelationIDsFilter(idsFilter string) (func(*osm.Relation) bool, error) {
 	if idsFilter == "" {
 		return nil, nil
 	}
@@ -84,6 +85,35 @@ func relationIDsFilter(idsFilter string) (func(*osm.Relation) bool, error) {
 	return func(relation *osm.Relation) bool {
 		_, ok := relationIDs[relation.ID]
 		return ok
+	}, nil
+}
+
+func newTagsFilter(tagsFilter string) (func(osm.Tags) bool, error) {
+	if tagsFilter == "" {
+		return nil, nil
+	}
+	requiredValues := make(map[string]string)
+	requiredKeys := make(map[string]struct{})
+	for _, pair := range strings.Split(tagsFilter, ",") {
+		key, value, found := strings.Cut(pair, "=")
+		requiredKeys[key] = struct{}{}
+		if found {
+			requiredValues[key] = value
+		}
+	}
+	return func(tags osm.Tags) bool {
+		tagsMap := tags.Map()
+		for requiredKey, requiredValue := range requiredValues {
+			if tagsMap[requiredKey] != requiredValue {
+				return false
+			}
+		}
+		for requiredKey := range requiredKeys {
+			if _, ok := tagsMap[requiredKey]; !ok {
+				return false
+			}
+		}
+		return true
 	}, nil
 }
 
@@ -341,6 +371,11 @@ func run() error {
 
 	flag.Parse()
 
+	tagsFilter, err := newTagsFilter(*tagsFilterStr)
+	if err != nil {
+		return err
+	}
+
 	file, err := os.Open(*inputFilename)
 	if err != nil {
 		return err
@@ -351,9 +386,22 @@ func run() error {
 
 	switch *osmType {
 	case "node":
-		nodeFilter, err := nodeIDsFilter(*idsFilter)
+		nodeIDFilter, err := newNodeIDsFilter(*idsFilterStr)
 		if err != nil {
 			return err
+		}
+		var nodeFilter func(*osm.Node) bool
+		switch {
+		case nodeIDFilter != nil && tagsFilter == nil:
+			nodeFilter = nodeIDFilter
+		case nodeIDFilter == nil && tagsFilter != nil:
+			nodeFilter = func(node *osm.Node) bool {
+				return tagsFilter(node.Tags)
+			}
+		case nodeIDFilter != nil && tagsFilter != nil:
+			nodeFilter = func(node *osm.Node) bool {
+				return nodeIDFilter(node) && tagsFilter(node.Tags)
+			}
 		}
 		nodes, err := findNodes(ctx, file, nodeFilter)
 		if err != nil {
@@ -366,9 +414,22 @@ func run() error {
 			featureCollection.Append(feature)
 		}
 	case "way":
-		wayFilter, err := wayIDsFilter(*idsFilter)
+		wayIDFilter, err := newWayIDsFilter(*idsFilterStr)
 		if err != nil {
 			return err
+		}
+		var wayFilter func(*osm.Way) bool
+		switch {
+		case wayIDFilter != nil && tagsFilter == nil:
+			wayFilter = wayIDFilter
+		case wayIDFilter == nil && tagsFilter != nil:
+			wayFilter = func(way *osm.Way) bool {
+				return tagsFilter(way.Tags)
+			}
+		case wayIDFilter != nil && tagsFilter != nil:
+			wayFilter = func(way *osm.Way) bool {
+				return wayIDFilter(way) && tagsFilter(way.Tags)
+			}
 		}
 		ways, err := findWays(ctx, file, wayFilter)
 		if err != nil {
@@ -391,9 +452,22 @@ func run() error {
 			featureCollection.Append(feature)
 		}
 	case "relation":
-		relationFilter, err := relationIDsFilter(*idsFilter)
+		relationIDFilter, err := newRelationIDsFilter(*idsFilterStr)
 		if err != nil {
 			return err
+		}
+		var relationFilter func(*osm.Relation) bool
+		switch {
+		case relationIDFilter != nil && tagsFilter == nil:
+			relationFilter = relationIDFilter
+		case relationIDFilter == nil && tagsFilter != nil:
+			relationFilter = func(relation *osm.Relation) bool {
+				return tagsFilter(relation.Tags)
+			}
+		case relationIDFilter != nil && tagsFilter != nil:
+			relationFilter = func(relation *osm.Relation) bool {
+				return relationIDFilter(relation) && tagsFilter(relation.Tags)
+			}
 		}
 		multiLineStringByRoleByRelation, err := findRelations(ctx, file, relationFilter)
 		if err != nil {

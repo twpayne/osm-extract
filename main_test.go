@@ -18,7 +18,7 @@ func TestFindNodes(t *testing.T) {
 	require.NoError(t, err)
 	defer file.Close()
 
-	nodeFilter, err := nodeIDsFilter("286973603")
+	nodeFilter, err := newNodeIDsFilter("286973603")
 	require.NoError(t, err)
 
 	nodes, err := findNodes(ctx, file, nodeFilter)
@@ -36,7 +36,7 @@ func TestFindWays(t *testing.T) {
 	require.NoError(t, err)
 	defer file.Close()
 
-	wayFilter, err := wayIDsFilter("136226765")
+	wayFilter, err := newWayIDsFilter("136226765")
 	require.NoError(t, err)
 
 	ways, err := findWays(ctx, file, wayFilter)
@@ -61,7 +61,7 @@ func TestFindRelation(t *testing.T) {
 	require.NoError(t, err)
 	defer file.Close()
 
-	relationFilter, err := relationIDsFilter("58446")
+	relationFilter, err := newRelationIDsFilter("58446")
 	require.NoError(t, err)
 
 	multiLineStringByRoleByRelation, err := findRelations(ctx, file, relationFilter)
