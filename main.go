@@ -9,6 +9,8 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"strconv"
+	"strings"
 
 	"github.com/paulmach/orb"
 	"github.com/paulmach/orb/geojson"
@@ -20,58 +22,114 @@ import (
 
 var (
 	compact        = flag.Bool("c", false, "compact output")
+	idsFilter      = flag.String("ids", "", "IDs")
 	inputFilename  = flag.String("i", "", "input filename (.osm.pbf format)")
-	nodeID         = flag.Int("n", 0, "node ID")
+	osmType        = flag.String("type", "", "type (node, way, or relation)")
 	outputFilename = flag.String("o", "", "output filename")
-	polygon        = flag.Bool("p", false, "way linestring as polygon") // FIXME improve help text
+	polygonize     = flag.Bool("p", false, "polygonize ways")
 	procs          = flag.Int("j", runtime.GOMAXPROCS(0), "parallelism")
-	relationID     = flag.Int("r", 0, "relation ID")
-	wayID          = flag.Int("w", 0, "way ID")
 )
 
-func findNode(ctx context.Context, r io.ReadSeeker, nodeID osm.NodeID) (*osm.Node, error) {
+func nodeIDsFilter(idsFilter string) (func(*osm.Node) bool, error) {
+	if idsFilter == "" {
+		return nil, nil
+	}
+	nodeIDStrs := strings.Split(idsFilter, ",")
+	nodeIDs := make(map[osm.NodeID]struct{}, len(nodeIDStrs))
+	for _, nodeIDStr := range nodeIDStrs {
+		nodeID, err := strconv.Atoi(nodeIDStr)
+		if err != nil {
+			return nil, err
+		}
+		nodeIDs[osm.NodeID(nodeID)] = struct{}{}
+	}
+	return func(node *osm.Node) bool {
+		_, ok := nodeIDs[node.ID]
+		return ok
+	}, nil
+}
+
+func wayIDsFilter(idsFilter string) (func(*osm.Way) bool, error) {
+	if idsFilter == "" {
+		return nil, nil
+	}
+	wayIDStrs := strings.Split(idsFilter, ",")
+	wayIDs := make(map[osm.WayID]struct{}, len(wayIDStrs))
+	for _, wayIDStr := range wayIDStrs {
+		wayID, err := strconv.Atoi(wayIDStr)
+		if err != nil {
+			return nil, err
+		}
+		wayIDs[osm.WayID(wayID)] = struct{}{}
+	}
+	return func(way *osm.Way) bool {
+		_, ok := wayIDs[way.ID]
+		return ok
+	}, nil
+}
+
+func relationIDsFilter(idsFilter string) (func(*osm.Relation) bool, error) {
+	if idsFilter == "" {
+		return nil, nil
+	}
+	relationIDStrs := strings.Split(idsFilter, ",")
+	relationIDs := make(map[osm.RelationID]struct{}, len(relationIDStrs))
+	for _, relationIDStr := range relationIDStrs {
+		relationID, err := strconv.Atoi(relationIDStr)
+		if err != nil {
+			return nil, err
+		}
+		relationIDs[osm.RelationID(relationID)] = struct{}{}
+	}
+	return func(relation *osm.Relation) bool {
+		_, ok := relationIDs[relation.ID]
+		return ok
+	}, nil
+}
+
+func findNodes(ctx context.Context, r io.ReadSeeker, filterNode func(*osm.Node) bool) ([]*osm.Node, error) {
 	if _, err := r.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
 
-	// Scan to find the node.
+	// Scan to find nodes.
+	var nodes []*osm.Node
 	scanner := osmpbf.New(ctx, r, *procs)
 	defer scanner.Close()
-	scanner.FilterNode = func(node *osm.Node) bool {
-		return node.ID == nodeID
-	}
+	scanner.FilterNode = filterNode
 	scanner.SkipRelations = true
 	scanner.SkipWays = true
 	for scanner.Scan() {
 		if node, ok := scanner.Object().(*osm.Node); ok {
-			return node, nil
+			nodes = append(nodes, node)
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 
-	return nil, nil
+	return nodes, nil
 }
 
-func findWay(ctx context.Context, r io.ReadSeeker, wayID osm.WayID) (*osm.Way, error) {
+func findWays(ctx context.Context, r io.ReadSeeker, filterWay func(*osm.Way) bool) ([]*osm.Way, error) {
 	if _, err := r.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
 
-	// Scan to find the way.
+	// Scan to find ways.
+	wayNodesIDs := make(map[osm.NodeID]struct{})
 	wayScanner := osmpbf.New(ctx, r, *procs)
 	defer wayScanner.Close()
 	wayScanner.SkipNodes = true
-	wayScanner.FilterWay = func(way *osm.Way) bool {
-		return way.ID == wayID
-	}
+	wayScanner.FilterWay = filterWay
 	wayScanner.SkipRelations = true
-	var way *osm.Way
+	var ways []*osm.Way
 	for wayScanner.Scan() {
-		var ok bool
-		if way, ok = wayScanner.Object().(*osm.Way); ok {
-			break
+		if way, ok := wayScanner.Object().(*osm.Way); ok {
+			for _, wayNode := range way.Nodes {
+				wayNodesIDs[wayNode.ID] = struct{}{}
+			}
+			ways = append(ways, way)
 		}
 	}
 	if err := wayScanner.Err(); err != nil {
@@ -81,31 +139,23 @@ func findWay(ctx context.Context, r io.ReadSeeker, wayID osm.WayID) (*osm.Way, e
 		return nil, err
 	}
 
-	// Find all nodes in the way.
-	wayNodesByNodeID := make(map[osm.NodeID]*osm.WayNode, len(way.Nodes))
-	for i, wayNode := range way.Nodes {
-		wayNodesByNodeID[wayNode.ID] = &way.Nodes[i]
-	}
-
 	if _, err := r.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
 
 	// Scan to find all nodes.
+	nodesByNodeID := make(map[osm.NodeID]*osm.Node, len(wayNodesIDs))
 	nodeScanner := osmpbf.New(ctx, r, *procs)
 	defer nodeScanner.Close()
 	nodeScanner.FilterNode = func(node *osm.Node) bool {
-		return wayNodesByNodeID[node.ID] != nil
+		_, ok := wayNodesIDs[node.ID]
+		return ok
 	}
 	nodeScanner.SkipWays = true
 	nodeScanner.SkipRelations = true
 	for nodeScanner.Scan() {
 		if node, ok := nodeScanner.Object().(*osm.Node); ok {
-			wayNode := wayNodesByNodeID[node.ID]
-			wayNode.Version = node.Version
-			wayNode.ChangesetID = node.ChangesetID
-			wayNode.Lat = node.Lat
-			wayNode.Lon = node.Lon
+			nodesByNodeID[node.ID] = node
 		}
 	}
 	if err := nodeScanner.Err(); err != nil {
@@ -115,55 +165,55 @@ func findWay(ctx context.Context, r io.ReadSeeker, wayID osm.WayID) (*osm.Way, e
 		return nil, err
 	}
 
-	return way, nil
-}
-
-func findRelation(ctx context.Context, r io.ReadSeeker, relationID osm.RelationID) (*osm.Relation, map[string]orb.MultiLineString, error) {
-	if _, err := r.Seek(0, io.SeekStart); err != nil {
-		return nil, nil, err
+	// Populate way nodes.
+	for _, way := range ways {
+		for i, wayNode := range way.Nodes {
+			node := nodesByNodeID[wayNode.ID]
+			way.Nodes[i].Lat = node.Lat
+			way.Nodes[i].Lon = node.Lon
+		}
 	}
 
-	// Find the relation.
+	return ways, nil
+}
+
+func findRelations(ctx context.Context, r io.ReadSeeker, relationFilter func(*osm.Relation) bool) (map[*osm.Relation]map[string]orb.MultiLineString, error) {
+	if _, err := r.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+
+	// Scan to find relations.
+	var relations []*osm.Relation
+	wayIDs := make(map[osm.WayID]struct{})
 	relationScanner := osmpbf.New(ctx, r, *procs)
 	defer relationScanner.Close()
 	relationScanner.SkipNodes = true
 	relationScanner.SkipWays = true
-	relationScanner.FilterRelation = func(relation *osm.Relation) bool {
-		return relation.ID == relationID
-	}
-	var relation *osm.Relation
+	relationScanner.FilterRelation = relationFilter
 	for relationScanner.Scan() {
-		var ok bool
-		relation, ok = relationScanner.Object().(*osm.Relation)
-		if ok {
-			break
+		if relation, ok := relationScanner.Object().(*osm.Relation); ok {
+			for _, member := range relation.Members {
+				if member.Type != "way" {
+					continue
+				}
+				wayID := osm.WayID(member.Ref)
+				wayIDs[wayID] = struct{}{}
+			}
+			relations = append(relations, relation)
 		}
 	}
 	if err := relationScanner.Err(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if err := relationScanner.Close(); err != nil {
-		return nil, nil, err
-	}
-	if relation == nil {
-		return nil, nil, nil
-	}
-
-	// Find all way IDs in the relation.
-	wayIDs := make(map[osm.WayID]struct{}, len(relation.Members))
-	for _, member := range relation.Members {
-		if member.Type != "way" {
-			continue
-		}
-		wayID := osm.WayID(member.Ref)
-		wayIDs[wayID] = struct{}{}
+		return nil, err
 	}
 
 	if _, err := r.Seek(0, io.SeekStart); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	// Find all waysByWayID amd node IDs.
+	// Find all node IDs.
 	waysByWayID := make(map[osm.WayID]*osm.Way, len(wayIDs))
 	wayNodeIDs := make(map[osm.NodeID]struct{})
 	wayScanner := osmpbf.New(ctx, r, *procs)
@@ -183,10 +233,10 @@ func findRelation(ctx context.Context, r io.ReadSeeker, relationID osm.RelationI
 	}
 
 	if _, err := r.Seek(0, io.SeekStart); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	// Scan to find all nodesByNodeID.
+	// Scan to find all nodes.
 	nodesByNodeID := make(map[osm.NodeID]*osm.Node, len(wayNodeIDs))
 	nodeScanner := osmpbf.New(ctx, r, *procs)
 	nodeScanner.FilterNode = func(node *osm.Node) bool {
@@ -201,38 +251,42 @@ func findRelation(ctx context.Context, r io.ReadSeeker, relationID osm.RelationI
 		}
 	}
 	if err := nodeScanner.Err(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if err := nodeScanner.Close(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	// Construct MultiLineStrings.
-	multiLineStringByRole := make(map[string]orb.MultiLineString)
-	for _, member := range relation.Members {
-		if member.Type != "way" {
-			continue
-		}
-		wayID := osm.WayID(member.Ref)
-		way, ok := waysByWayID[wayID]
-		if !ok {
-			log.Printf("relation %d: way %d: not found", relationID, wayID)
-			continue
-		}
-		lineString := make(orb.LineString, 0, len(way.Nodes))
-		for _, wayNode := range way.Nodes {
-			node, ok := nodesByNodeID[wayNode.ID]
-			if !ok {
-				log.Printf("relation %d: way %d: node %d: not found", relationID, wayID, wayNode.ID)
+	// Create MultiLineStrings.
+	multiLineStringByRoleByRelation := make(map[*osm.Relation]map[string]orb.MultiLineString)
+	for _, relation := range relations {
+		multiLineStringByRole := make(map[string]orb.MultiLineString)
+		for _, member := range relation.Members {
+			if member.Type != "way" {
 				continue
 			}
-			point := orb.Point{node.Lon, node.Lat}
-			lineString = append(lineString, point)
+			wayID := osm.WayID(member.Ref)
+			way, ok := waysByWayID[wayID]
+			if !ok {
+				log.Printf("relation %d: way %d: not found", relation.ID, wayID)
+				continue
+			}
+			lineString := make(orb.LineString, 0, len(way.Nodes))
+			for _, wayNode := range way.Nodes {
+				node, ok := nodesByNodeID[wayNode.ID]
+				if !ok {
+					log.Printf("relation %d: way %d: node %d: not found", relation.ID, wayID, wayNode.ID)
+					continue
+				}
+				point := orb.Point{node.Lon, node.Lat}
+				lineString = append(lineString, point)
+			}
+			multiLineStringByRole[member.Role] = append(multiLineStringByRole[member.Role], lineString)
 		}
-		multiLineStringByRole[member.Role] = append(multiLineStringByRole[member.Role], lineString)
+		multiLineStringByRoleByRelation[relation] = multiLineStringByRole
 	}
 
-	return relation, multiLineStringByRole, nil
+	return multiLineStringByRoleByRelation, nil
 }
 
 func geosGeometry(geometry orb.Geometry) *geos.Geom {
@@ -295,27 +349,34 @@ func run() error {
 
 	featureCollection := geojson.NewFeatureCollection()
 
-	if *nodeID != 0 {
-		node, err := findNode(ctx, file, osm.NodeID(*nodeID))
+	switch *osmType {
+	case "node":
+		nodeFilter, err := nodeIDsFilter(*idsFilter)
 		if err != nil {
 			return err
 		}
-		if node != nil {
+		nodes, err := findNodes(ctx, file, nodeFilter)
+		if err != nil {
+			return err
+		}
+		for _, node := range nodes {
 			feature := geojson.NewFeature(node.Point())
 			feature.ID = node.FeatureID()
 			appendTagProperties(feature.Properties, node.Tags)
 			featureCollection.Append(feature)
 		}
-	}
-
-	if *wayID != 0 {
-		way, err := findWay(ctx, file, osm.WayID(*wayID))
+	case "way":
+		wayFilter, err := wayIDsFilter(*idsFilter)
 		if err != nil {
 			return err
 		}
-		if way != nil {
+		ways, err := findWays(ctx, file, wayFilter)
+		if err != nil {
+			return err
+		}
+		for _, way := range ways {
 			var geometry orb.Geometry
-			if *polygon {
+			if *polygonize {
 				points := slices.Clone([]orb.Point(way.LineString()))
 				if len(points) > 0 && points[len(points)-1] != points[0] {
 					points = append(points, points[0])
@@ -329,16 +390,17 @@ func run() error {
 			appendTagProperties(feature.Properties, way.Tags)
 			featureCollection.Append(feature)
 		}
-	}
-
-	if *relationID != 0 {
-		relation, multiLineStringByRole, err := findRelation(ctx, file, osm.RelationID(*relationID))
+	case "relation":
+		relationFilter, err := relationIDsFilter(*idsFilter)
 		if err != nil {
 			return err
 		}
-		if relation != nil {
-			// var geometry orb.Geometry
-			if *polygon {
+		multiLineStringByRoleByRelation, err := findRelations(ctx, file, relationFilter)
+		if err != nil {
+			return err
+		}
+		if *polygonize {
+			for relation, multiLineStringByRole := range multiLineStringByRoleByRelation {
 				outerMultiLineString := multiLineStringByRole["outer"]
 				geom := geosGeometry(outerMultiLineString)
 				geosOuterMultiPolygon := geos.PolygonizeValid([]*geos.Geom{geom})
@@ -347,7 +409,9 @@ func run() error {
 				feature.ID = relation.FeatureID()
 				appendTagProperties(feature.Properties, relation.Tags)
 				featureCollection.Append(feature)
-			} else {
+			}
+		} else {
+			for relation, multiLineStringByRole := range multiLineStringByRoleByRelation {
 				for role, multiLineString := range multiLineStringByRole {
 					feature := geojson.NewFeature(multiLineString)
 					feature.ID = fmt.Sprintf("%d:%s", relation.FeatureID(), role)
@@ -356,6 +420,8 @@ func run() error {
 				}
 			}
 		}
+	default:
+		return fmt.Errorf("%s: unknown type", *osmType)
 	}
 
 	file.Close()
