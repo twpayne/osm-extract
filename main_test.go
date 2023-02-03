@@ -44,3 +44,16 @@ func TestFindWay(t *testing.T) {
 		{-4.461103400000001, 54.2636552},
 	}, way.LineString())
 }
+
+func TestFindRelation(t *testing.T) {
+	ctx := context.Background()
+
+	file, err := os.Open("testdata/isle-of-man-latest.osm.pbf")
+	require.NoError(t, err)
+	defer file.Close()
+
+	relation, multiLineStringByRole, err := findRelation(ctx, file, 58446)
+	require.NoError(t, err)
+	assert.Equal(t, osm.RelationID(58446), relation.ID)
+	assert.Len(t, multiLineStringByRole["outer"], 3)
+}
