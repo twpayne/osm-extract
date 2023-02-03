@@ -359,6 +359,14 @@ func orbGeometry(geosGeometry *geos.Geom) orb.Geometry {
 		polygon := make(orb.Polygon, 0, 1+numInteriorRings)
 		polygon = append(polygon, orbGeometry(geosGeometry.ExteriorRing()).(orb.Ring))
 		return polygon
+	case geos.TypeIDMultiPolygon:
+		numGeometries := geosGeometry.NumGeometries()
+		multiPolygon := make(orb.MultiPolygon, 0, numGeometries)
+		for i := 0; i < numGeometries; i++ {
+			polygon := orbGeometry(geosGeometry.Geometry(i)).(orb.Polygon)
+			multiPolygon = append(multiPolygon, polygon)
+		}
+		return multiPolygon
 	default:
 		panic(fmt.Sprintf("%s: unsupported type", geosGeometry.Type()))
 	}
