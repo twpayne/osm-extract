@@ -1,7 +1,5 @@
 package main
 
-// FIXME implement polygon holes
-// FIXME factor out orb/go-geos conversions
 // FIXME implement Overpass API instead of -ids/-tags
 
 import (
@@ -20,6 +18,7 @@ import (
 	"github.com/paulmach/orb/geojson"
 	"github.com/paulmach/osm"
 	"github.com/paulmach/osm/osmpbf"
+	"github.com/twpayne/go-geobabel"
 	"github.com/twpayne/go-geos"
 	"golang.org/x/exp/slices"
 )
@@ -323,55 +322,6 @@ func findRelations(ctx context.Context, r io.ReadSeeker, relationFilter func(*os
 	return multiLineStringByRoleByRelation, nil
 }
 
-func geosGeometry(geometry orb.Geometry) *geos.Geom {
-	switch geometry := geometry.(type) {
-	case orb.LineString:
-		coords := make([][]float64, 0, len(geometry))
-		for _, point := range geometry {
-			coord := []float64{point.X(), point.Y()}
-			coords = append(coords, coord)
-		}
-		return geos.NewLineString(coords)
-	case orb.MultiLineString:
-		geosLineStrings := make([]*geos.Geom, 0, len(geometry))
-		for _, lineString := range geometry {
-			geosLineString := geosGeometry(lineString)
-			geosLineStrings = append(geosLineStrings, geosLineString)
-		}
-		return geos.NewCollection(geos.TypeIDGeometryCollection, geosLineStrings)
-	default:
-		panic(fmt.Sprintf("%s: unsupported type", geometry.GeoJSONType()))
-	}
-}
-
-func orbGeometry(geosGeometry *geos.Geom) orb.Geometry {
-	switch geosGeometry.TypeID() {
-	case geos.TypeIDLinearRing:
-		coords := geosGeometry.CoordSeq().ToCoords()
-		ring := make(orb.Ring, 0, len(coords))
-		for _, coord := range coords {
-			point := orb.Point{coord[0], coord[1]}
-			ring = append(ring, point)
-		}
-		return ring
-	case geos.TypeIDPolygon:
-		numInteriorRings := geosGeometry.NumInteriorRings()
-		polygon := make(orb.Polygon, 0, 1+numInteriorRings)
-		polygon = append(polygon, orbGeometry(geosGeometry.ExteriorRing()).(orb.Ring))
-		return polygon
-	case geos.TypeIDMultiPolygon:
-		numGeometries := geosGeometry.NumGeometries()
-		multiPolygon := make(orb.MultiPolygon, 0, numGeometries)
-		for i := 0; i < numGeometries; i++ {
-			polygon := orbGeometry(geosGeometry.Geometry(i)).(orb.Polygon)
-			multiPolygon = append(multiPolygon, polygon)
-		}
-		return multiPolygon
-	default:
-		panic(fmt.Sprintf("%s: unsupported type", geosGeometry.Type()))
-	}
-}
-
 func appendTagProperties(properties geojson.Properties, tags osm.Tags) {
 	for _, tag := range tags {
 		properties[tag.Key] = tag.Value
@@ -486,11 +436,17 @@ func run() error {
 			return err
 		}
 		if *polygonize {
+			geosContext := geos.NewContext()
 			for relation, multiLineStringByRole := range multiLineStringByRoleByRelation {
 				outerMultiLineString := multiLineStringByRole["outer"]
-				geom := geosGeometry(outerMultiLineString)
-				geosOuterMultiPolygon := geos.PolygonizeValid([]*geos.Geom{geom})
-				geometry := orbGeometry(geosOuterMultiPolygon)
+				geom := geobabel.NewGEOSGeomFromOrbGeometry(geosContext, outerMultiLineString)
+				geosMultiPolygon := geosContext.PolygonizeValid([]*geos.Geom{geom})
+				if innerMultiLineString, ok := multiLineStringByRole["inner"]; ok {
+					geosInnerMultiLineString := geobabel.NewGEOSGeomFromOrbGeometry(geosContext, innerMultiLineString)
+					geosInnerMultiPolygon := geosContext.PolygonizeValid([]*geos.Geom{geosInnerMultiLineString})
+					geosMultiPolygon = geosMultiPolygon.Difference(geosInnerMultiPolygon)
+				}
+				geometry := geobabel.NewOrbGeometryFromGEOSGeom(geosMultiPolygon)
 				feature := geojson.NewFeature(geometry)
 				feature.ID = relation.FeatureID()
 				appendTagProperties(feature.Properties, relation.Tags)
