@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -95,24 +96,45 @@ func newTagsFilter(tagsFilter string) (func(osm.Tags) bool, error) {
 	if tagsFilter == "" {
 		return nil, nil
 	}
-	requiredValues := make(map[string]string)
 	requiredKeys := make(map[string]struct{})
+	requiredValues := make(map[string]string)
+	requiredRegexps := make(map[string]*regexp.Regexp)
 	for _, pair := range strings.Split(tagsFilter, ",") {
-		key, value, found := strings.Cut(pair, "=")
-		requiredKeys[key] = struct{}{}
-		if found {
+		switch key, value, found := strings.Cut(pair, "="); {
+		case !found:
+			requiredKeys[key] = struct{}{}
+		case len(value) >= 2 && value[0] == '/' && value[len(value)-1] == '/':
+			requiredRegexp, err := regexp.Compile(value[1 : len(value)-1])
+			if err != nil {
+				return nil, err
+			}
+			requiredRegexps[key] = requiredRegexp
+		default:
 			requiredValues[key] = value
 		}
 	}
 	return func(tags osm.Tags) bool {
 		tagsMap := tags.Map()
-		for requiredKey, requiredValue := range requiredValues {
-			if tagsMap[requiredKey] != requiredValue {
+		for requiredKey := range requiredKeys {
+			if _, ok := tagsMap[requiredKey]; !ok {
 				return false
 			}
 		}
-		for requiredKey := range requiredKeys {
-			if _, ok := tagsMap[requiredKey]; !ok {
+		for requiredKey, requiredValue := range requiredValues {
+			tagValue, ok := tagsMap[requiredKey]
+			if !ok {
+				return false
+			}
+			if tagValue != requiredValue {
+				return false
+			}
+		}
+		for requiredKey, requiredRegexp := range requiredRegexps {
+			tagValue, ok := tagsMap[requiredKey]
+			if !ok {
+				return false
+			}
+			if !requiredRegexp.MatchString(tagValue) {
 				return false
 			}
 		}
