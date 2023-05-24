@@ -13,6 +13,7 @@ files](https://wiki.openstreetmap.org/wiki/PBF_Format) as
 * Extremely fast, thanks to
   [`github.com/paulmach/osm`](https://github.com/paulmach/osm/).
 * Optionally polygonizes ways and relations, thanks to [GEOS](https://libgeos.org).
+* Optionally unions all features into a single feature.
 
 ## Install
 
@@ -26,6 +27,7 @@ Extract the administrative boundaries of the Isle of Man as a polygon:
 
 ```console
 $ osm-extract -i testdata/isle-of-man-latest.osm.pbf -type=relation -tags=ISO3166-1=IM,admin_level=2 -polygonize
+$ osm-extract -i testdata/isle-of-man-latest.osm.pbf -type=relation -tags=admin_level=6 -polygonize -union
 ```
 
 ## License

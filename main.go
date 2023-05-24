@@ -12,6 +12,7 @@ import (
 	"os"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/paulmach/osm/osmpbf"
 	"github.com/twpayne/go-geobabel"
 	"github.com/twpayne/go-geos"
+	"golang.org/x/exp/maps"
 	"golang.org/x/exp/slices"
 )
 
@@ -33,6 +35,7 @@ var (
 	polygonize     = flag.Bool("polygonize", false, "polygonize ways")
 	procs          = flag.Int("j", runtime.GOMAXPROCS(0), "parallelism")
 	tagsFilterStr  = flag.String("tags", "", "tag filter")
+	union          = flag.Bool("union", false, "union all geometries")
 )
 
 func newNodeIDsFilter(idsFilter string) (func(*osm.Node) bool, error) {
@@ -490,6 +493,51 @@ func run() error {
 
 	file.Close()
 
+	var output any
+	if *union {
+		geosContext := geos.NewContext()
+
+		// Observe unique property values and build a slice of geometries.
+		uniquePropertyValuesByKey := make(map[string]map[string]struct{})
+		geometries := make([]*geos.Geom, 0, len(featureCollection.Features))
+		for _, feature := range featureCollection.Features {
+			for key, value := range feature.Properties {
+				if _, ok := uniquePropertyValuesByKey[key]; !ok {
+					uniquePropertyValuesByKey[key] = make(map[string]struct{})
+				}
+				uniquePropertyValuesByKey[key][value.(string)] = struct{}{}
+			}
+			geometry := geobabel.NewGEOSGeomFromOrbGeometry(geosContext, feature.Geometry)
+			geometries = append(geometries, geometry)
+		}
+
+		// Union properties.
+		unionProperties := make(geojson.Properties)
+		for key, uniqueValues := range uniquePropertyValuesByKey {
+			uniqueValuesSlice := maps.Keys(uniqueValues)
+			sort.Strings(uniqueValuesSlice)
+			unionProperties[key] = strings.Join(uniqueValuesSlice, ", ")
+		}
+
+		// Union geometries.
+		var unionGeosGeometry *geos.Geom
+		typeID := geos.TypeIDMultiLineString
+		if *polygonize {
+			unionGeosGeometry = geosContext.NewCollection(typeID, geometries).CoverageUnion()
+		} else {
+			unionGeosGeometry = geosContext.NewCollection(typeID, geometries).UnaryUnion()
+		}
+		orbUnionGeometry := geobabel.NewOrbGeometryFromGEOSGeom(unionGeosGeometry)
+
+		// Build union feature.
+		feature := geojson.NewFeature(orbUnionGeometry)
+		feature.Properties = unionProperties
+
+		output = feature
+	} else {
+		output = featureCollection
+	}
+
 	var writer io.Writer
 	if *outputFilename == "" || *outputFilename == "-" {
 		writer = os.Stdout
@@ -506,7 +554,7 @@ func run() error {
 	if !*compact {
 		jsonEncoder.SetIndent("", "\t")
 	}
-	if err := jsonEncoder.Encode(featureCollection); err != nil {
+	if err := jsonEncoder.Encode(output); err != nil {
 		return err
 	}
 
