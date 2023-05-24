@@ -5,25 +5,24 @@ import (
 	"os"
 	"testing"
 
+	"github.com/alecthomas/assert/v2"
 	"github.com/paulmach/orb"
 	"github.com/paulmach/osm"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestFindNodes(t *testing.T) {
 	ctx := context.Background()
 
 	file, err := os.Open("testdata/isle-of-man-latest.osm.pbf")
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	defer file.Close()
 
 	nodeFilter, err := newNodeIDsFilter("286973603")
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	nodes, err := findNodes(ctx, file, nodeFilter)
-	require.NoError(t, err)
-	require.Len(t, nodes, 1)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(nodes))
 	assert.Equal(t, osm.NodeID(286973603), nodes[0].ID)
 	assert.Equal(t, 54.263872000000006, nodes[0].Lat)
 	assert.Equal(t, -4.4610048, nodes[0].Lon)
@@ -33,15 +32,15 @@ func TestFindWays(t *testing.T) {
 	ctx := context.Background()
 
 	file, err := os.Open("testdata/isle-of-man-latest.osm.pbf")
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	defer file.Close()
 
 	wayFilter, err := newWayIDsFilter("136226765")
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	ways, err := findWays(ctx, file, wayFilter)
-	require.NoError(t, err)
-	require.Len(t, ways, 1)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(ways))
 	assert.Equal(t, osm.WayID(136226765), ways[0].ID)
 	assert.Equal(t, orb.LineString{
 		{-4.461103400000001, 54.2636552},
@@ -58,17 +57,17 @@ func TestFindRelation(t *testing.T) {
 	ctx := context.Background()
 
 	file, err := os.Open("testdata/isle-of-man-latest.osm.pbf")
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	defer file.Close()
 
 	relationFilter, err := newRelationIDsFilter("58446")
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	multiLineStringByRoleByRelation, err := findRelations(ctx, file, relationFilter)
-	require.NoError(t, err)
-	require.Len(t, multiLineStringByRoleByRelation, 1)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(multiLineStringByRoleByRelation))
 	for relation, multiLineStringByRole := range multiLineStringByRoleByRelation {
 		assert.Equal(t, osm.RelationID(58446), relation.ID)
-		assert.Len(t, multiLineStringByRole["outer"], 3)
+		assert.Equal(t, 3, len(multiLineStringByRole["outer"]))
 	}
 }
