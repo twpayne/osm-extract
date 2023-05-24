@@ -12,7 +12,7 @@ files](https://wiki.openstreetmap.org/wiki/PBF_Format) as
 * Preserves OpenStreetMap tags as GeoJSON properties.
 * Extremely fast, thanks to
   [`github.com/paulmach/osm`](https://github.com/paulmach/osm/).
-* Polygonization of ways and relations, thanks to [GEOS](https://libgeos.org).
+* Optionally polygonizes ways and relations, thanks to [GEOS](https://libgeos.org).
 
 ## Install
 
