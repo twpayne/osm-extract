@@ -12,6 +12,7 @@ import (
 	"os"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,8 +23,6 @@ import (
 	"github.com/paulmach/osm/osmpbf"
 	"github.com/twpayne/go-geobabel"
 	"github.com/twpayne/go-geos"
-	"golang.org/x/exp/maps"
-	"golang.org/x/exp/slices"
 )
 
 var (
@@ -514,7 +513,7 @@ func run() error {
 		// Union properties.
 		unionProperties := make(geojson.Properties)
 		for key, uniqueValues := range uniquePropertyValuesByKey {
-			uniqueValuesSlice := maps.Keys(uniqueValues)
+			uniqueValuesSlice := keys(uniqueValues)
 			sort.Strings(uniqueValuesSlice)
 			unionProperties[key] = strings.Join(uniqueValuesSlice, ", ")
 		}
@@ -559,6 +558,14 @@ func run() error {
 	}
 
 	return nil
+}
+
+func keys[M map[K]V, K comparable, V any](m M) []K {
+	keys := make([]K, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 func main() {
