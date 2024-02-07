@@ -12,6 +12,7 @@ import (
 	"os"
 	"regexp"
 	"runtime"
+	"runtime/pprof"
 	"slices"
 	"sort"
 	"strconv"
@@ -27,6 +28,7 @@ import (
 
 var (
 	compact        = flag.Bool("compact", false, "compact output")
+	cpuprofile     = flag.String("cpuprofile", "", "write CPU profile")
 	idsFilterStr   = flag.String("ids", "", "ID filter")
 	inputFilename  = flag.String("i", "", "input filename (.osm.pbf format)")
 	osmType        = flag.String("type", "", "type (node, way, or relation)")
@@ -356,6 +358,18 @@ func run() error {
 	ctx := context.Background()
 
 	flag.Parse()
+
+	if *cpuprofile != "" {
+		file, err := os.Create(*cpuprofile)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		if err := pprof.StartCPUProfile(file); err != nil {
+			return err
+		}
+		defer pprof.StopCPUProfile()
+	}
 
 	tagsFilter, err := newTagsFilter(*tagsFilterStr)
 	if err != nil {
