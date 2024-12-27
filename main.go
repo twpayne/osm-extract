@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"os"
 	"regexp"
 	"runtime"
 	"runtime/pprof"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -527,8 +527,7 @@ func run() error {
 		// Union properties.
 		unionProperties := make(geojson.Properties)
 		for key, uniqueValues := range uniquePropertyValuesByKey {
-			uniqueValuesSlice := keys(uniqueValues)
-			sort.Strings(uniqueValuesSlice)
+			uniqueValuesSlice := slices.Sorted(maps.Keys(uniqueValues))
 			unionProperties[key] = strings.Join(uniqueValuesSlice, ", ")
 		}
 
@@ -572,14 +571,6 @@ func run() error {
 	}
 
 	return nil
-}
-
-func keys[M map[K]V, K comparable, V any](m M) []K {
-	keys := make([]K, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
 }
 
 func main() {
